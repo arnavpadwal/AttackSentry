@@ -1,0 +1,9 @@
+{
+  "headless": true,
+  "nats_username": "attacksentry",
+  "nats_url": "nats://127.0.0.1:4222",
+  "subject": "sentry.flows",
+  "sensor_id": null,
+  "device": "any",
+  "kill_switch_active": false
+}

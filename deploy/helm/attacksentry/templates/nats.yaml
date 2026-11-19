@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "attacksentry.fullname" . }}-nats
+  labels: {{- include "attacksentry.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "attacksentry.fullname" . }}-nats
+  replicas: 1
+  selector:
+    matchLabels: { app: attacksentry-nats }
+  template:
+    metadata:
+      labels: { app: attacksentry-nats }
+    spec:
+      containers:
+        - name: nats
+          image: {{ .Values.nats.image }}
+          args: ["-js", "-sd", "/data", "--user", "{{ .Values.nats.user }}", "--pass", "$(NATS_PASSWORD)"]
+          env:
+            - name: NATS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "attacksentry.fullname" . }}-secret, key: nats-password }
+          ports: [{ containerPort: 4222 }]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests: { storage: {{ .Values.nats.storage }} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "attacksentry.fullname" . }}-nats
+  labels: {{- include "attacksentry.labels" . | nindent 4 }}
+spec:
+  ports: [{ port: 4222, targetPort: 4222 }]
+  selector: { app: attacksentry-nats }

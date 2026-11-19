@@ -1,0 +1,101 @@
+name: Release packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  sensor-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install capture and desktop libraries
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev libgtk-3-dev libappindicator3-dev
+      - name: Build Linux sensor
+        run: cargo build --manifest-path sentry_sensor/Cargo.toml --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sensor-linux-x86_64
+          path: sentry_sensor/target/release/sentry_sensor
+
+  sensor-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Download official Npcap SDK
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://npcap.com/dist/npcap-sdk-1.16.zip -OutFile npcap-sdk.zip
+          Expand-Archive npcap-sdk.zip -DestinationPath npcap-sdk
+      - name: Build Windows sensor
+        run: cargo build --manifest-path sentry_sensor/Cargo.toml --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sensor-windows-x86_64
+          path: sentry_sensor/target/release/sentry_sensor.exe
+
+  platform:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: "npm", cache-dependency-path: "UI/frontend/package-lock.json" }
+      - name: Validate and build console
+        run: npm --prefix UI/frontend ci && npm --prefix UI/frontend test && npm --prefix UI/frontend run build
+      - name: Validate Compose
+        env:
+          SENTRY_SECRET_KEY: 0123456789abcdef0123456789abcdef
+          SENTRY_BOOTSTRAP_ADMIN_PASSWORD: validation-password-only
+          POSTGRES_PASSWORD: validation-password-only
+          NATS_PASSWORD: validation-password-only
+        run: docker compose -f deploy/docker-compose/docker-compose.yml config --quiet
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-source
+          path: |
+            attacksentry.sh
+            attacksentry.ps1
+            deploy
+            Sentry
+            UI/frontend
+            scripts/gen_secrets.py
+            README.md
+            docs
+
+  assemble:
+    needs: [sensor-linux, sensor-windows, platform]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: sensor-linux-x86_64, path: staging/linux }
+      - uses: actions/download-artifact@v4
+        with: { name: sensor-windows-x86_64, path: staging/windows }
+      - name: Assemble release directory
+        run: |
+          mkdir -p sentry_sensor/target/release sentry_sensor/target/x86_64-pc-windows-msvc/release
+          cp staging/linux/sentry_sensor sentry_sensor/target/release/sentry_sensor
+          chmod +x sentry_sensor/target/release/sentry_sensor
+          cp staging/windows/sentry_sensor.exe sentry_sensor/target/x86_64-pc-windows-msvc/release/sentry_sensor.exe
+          SKIP_BUILD=1 scripts/package_release.sh
+          tar -C release -czf AttackSentry-linux-x86_64.tar.gz AttackSentry-1.0.0
+          cd release && zip -qr ../AttackSentry-windows-x86_64.zip AttackSentry-1.0.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AttackSentry-1.0.0
+          path: |
+            AttackSentry-linux-x86_64.tar.gz
+            AttackSentry-windows-x86_64.zip
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            AttackSentry-linux-x86_64.tar.gz
+            AttackSentry-windows-x86_64.zip

@@ -1,0 +1,23 @@
+[Unit]
+Description=AttackSentry backend (core + API)
+After=network.target postgresql.service nats.service
+
+[Service]
+Type=simple
+User=attacksentry
+Group=attacksentry
+WorkingDirectory=/opt/attacksentry/Sentry
+EnvironmentFile=/etc/attacksentry/sentry.env
+ExecStart=/opt/attacksentry/.venv/bin/python -m sentry
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/attacksentry/Sentry/data
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

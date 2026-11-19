@@ -1,0 +1,95 @@
+# ---------------------------------------------------------------------------
+# Secrets and local configuration — never commit
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*groq-api.txt
+scripts/.demo_key
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.venv312/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# ---------------------------------------------------------------------------
+# Node / frontend
+# ---------------------------------------------------------------------------
+node_modules/
+UI/frontend/dist/
+*.tsbuildinfo
+.vite/
+coverage/
+
+# ---------------------------------------------------------------------------
+# Rust
+# ---------------------------------------------------------------------------
+sentry_sensor/target/
+npcap-sdk/
+
+# ---------------------------------------------------------------------------
+# Runtime data and databases
+# ---------------------------------------------------------------------------
+Sentry/data/
+Sentry/attacksentry.db
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+release/
+attacksentry-zip/
+*.zip
+*.tar.gz
+*.tgz
+*.log
+
+# ---------------------------------------------------------------------------
+# Training data and generated artifacts (keep the scripts and model card)
+# ---------------------------------------------------------------------------
+Training/datasets/
+Training/clean_parquet/
+Training/raw_parquet/
+Training/sentry_datasets/
+Training/experts/
+Training/gating/
+Training/metrics/
+Training/*.parquet
+Training/*.csv
+
+# ---------------------------------------------------------------------------
+# Model bundles: ship the calibrated bundle, do not ship every experiment
+# ---------------------------------------------------------------------------
+Sentry/models/bundle_*/
+!Sentry/models/bundle_20260820-150548/
+!Sentry/models/bundle_20260820-150548/**
+!Sentry/models/bundle_latest
+
+# ---------------------------------------------------------------------------
+# Design tooling / OS / editor
+# ---------------------------------------------------------------------------
+.impeccable/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Offline training pipeline and datasets (not part of the public release)
+/Training/

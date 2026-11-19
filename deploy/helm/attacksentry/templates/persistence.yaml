@@ -1,0 +1,13 @@
+{{- if .Values.backend.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "attacksentry.fullname" . }}-data
+  labels:
+    {{- include "attacksentry.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.backend.persistence.storage }}
+{{- end }}

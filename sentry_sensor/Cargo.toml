@@ -1,0 +1,20 @@
+[package]
+name = "sentry_sensor"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+pcap = "2.1"
+etherparse = "0.14"
+dashmap = "6.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+async-nats = "0.34"
+eframe = "0.27"
+egui = "0.27"
+crossbeam-channel = "0.5"
+dirs = "6.0.0"
+tray-icon = { version = "0.22.1", default-features = false }
+keyring = "2.0.0"

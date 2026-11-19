@@ -1,0 +1,93 @@
+# AttackSentry — single-node production stack
+#  docker compose up -d
+# Frontend: http://localhost:8080
+
+services:
+  db:
+    image: timescale/timescaledb:2.27.1-pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-attacksentry}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a strong database password}
+      POSTGRES_DB: ${POSTGRES_DB:-attacksentry}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-attacksentry}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.14.1-alpine
+    command: ["-js", "-sd", "/data", "--user", "${NATS_USER:-attacksentry}", "--pass", "${NATS_PASSWORD:?set a NATS password}"]
+    ports:
+      - "${NATS_BIND_HOST:-127.0.0.1}:${NATS_PORT:-4222}:4222"
+    volumes:
+      - natsdata:/data
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../../Sentry
+    environment:
+      SENTRY_ENVIRONMENT: production
+      SENTRY_SECRET_KEY: ${SENTRY_SECRET_KEY:?set a strong secret key}
+      SENTRY_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-attacksentry}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-attacksentry}
+      SENTRY_TIMESCALE_ENABLED: "true"
+      SENTRY_NATS_URL: nats://${NATS_USER:-attacksentry}:${NATS_PASSWORD}@nats:4222
+      SENTRY_BOOTSTRAP_ADMIN_PASSWORD: ${SENTRY_BOOTSTRAP_ADMIN_PASSWORD:?set an admin password}
+      SENTRY_COOKIE_SECURE: ${SENTRY_COOKIE_SECURE:-false}
+      SENTRY_LLM_PROVIDER: ${SENTRY_LLM_PROVIDER:-openai}
+      SENTRY_LLM_BASE_URL: ${SENTRY_LLM_BASE_URL:-http://host.docker.internal:1234}
+      SENTRY_LLM_MODEL: ${SENTRY_LLM_MODEL:-default}
+      SENTRY_LLM_API_KEY: ${SENTRY_LLM_API_KEY:-not-needed}
+      SENTRY_LLM_INCLUDE_SENSITIVE_CONTEXT: ${SENTRY_LLM_INCLUDE_SENSITIVE_CONTEXT:-false}
+      SENTRY_LLM_BATCH_WINDOW_SECONDS: ${SENTRY_LLM_BATCH_WINDOW_SECONDS:-3}
+      SENTRY_LLM_BATCH_MAX_EVIDENCE: ${SENTRY_LLM_BATCH_MAX_EVIDENCE:-12}
+      SENTRY_LLM_MAX_CONCURRENCY: ${SENTRY_LLM_MAX_CONCURRENCY:-2}
+      SENTRY_LLM_MIN_INTERVAL_SECONDS: ${SENTRY_LLM_MIN_INTERVAL_SECONDS:-1}
+      SENTRY_BASELINE_HOURS: ${SENTRY_BASELINE_HOURS:-72}
+      SENTRY_RETENTION_DAYS: ${SENTRY_RETENTION_DAYS:-30}
+      SENTRY_WEBHOOK_URL: ${SENTRY_WEBHOOK_URL:-}
+      SENTRY_WEBHOOK_SECRET: ${SENTRY_WEBHOOK_SECRET:-}
+      SENTRY_WEBHOOK_MIN_SEVERITY: ${SENTRY_WEBHOOK_MIN_SEVERITY:-high}
+      SENTRY_RESPONSE_MODE: ${SENTRY_RESPONSE_MODE:-disabled}
+      SENTRY_RESPONSE_MIN_SEVERITY: ${SENTRY_RESPONSE_MIN_SEVERITY:-critical}
+      SENTRY_RESPONSE_MIN_CONFIDENCE: ${SENTRY_RESPONSE_MIN_CONFIDENCE:-0.9}
+      SENTRY_RESPONSE_ACTION: ${SENTRY_RESPONSE_ACTION:-dynamic}
+      SENTRY_RESPONSE_TTL_MINUTES: ${SENTRY_RESPONSE_TTL_MINUTES:-60}
+      SENTRY_LOG_FORMAT: ${SENTRY_LOG_FORMAT:-json}
+      SENTRY_LOG_LEVEL: ${SENTRY_LOG_LEVEL:-INFO}
+    volumes:
+      - sentrydata:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../../UI/frontend
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      - backend
+    environment:
+      BACKEND_URL: http://backend:8000
+    restart: unless-stopped
+
+  # Optional LM Studio (local LLM) — uncomment to enable AI triage.
+  # lmstudio:
+  #   image: ghcr.io/lmstudio-ai/lmstudio-server:latest
+  #   ports:
+  #     - "1234:1234"
+
+volumes:
+  pgdata:
+  natsdata:
+  sentrydata:

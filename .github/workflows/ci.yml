@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          cd Sentry
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.10.0
+          pip install -r requirements.txt pytest pytest-asyncio
+      - name: Lint
+        run: |
+          pip install ruff
+          cd Sentry && ruff check sentry tests
+      - name: Test
+        run: |
+          cd Sentry && python -m pytest tests -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install
+        run: cd UI/frontend && npm ci
+      - name: Typecheck
+        run: cd UI/frontend && npx tsc --noEmit
+      - name: Test
+        run: cd UI/frontend && npx vitest run
+      - name: Build
+        run: cd UI/frontend && npm run build
+
+  sensor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install capture and desktop libraries
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev libgtk-3-dev libappindicator3-dev libxdo-dev
+      - name: Build
+        run: cd sentry_sensor && cargo build --release

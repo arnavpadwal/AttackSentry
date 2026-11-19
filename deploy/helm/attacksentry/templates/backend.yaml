@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "attacksentry.fullname" . }}-backend
+  labels: {{- include "attacksentry.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  selector:
+    matchLabels: { app: attacksentry-backend }
+  template:
+    metadata:
+      labels: { app: attacksentry-backend }
+    spec:
+      containers:
+        - name: backend
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ containerPort: 8000 }]
+          env:
+            - name: SENTRY_ENVIRONMENT
+              value: {{ .Values.global.environment | quote }}
+            - name: SENTRY_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ include "attacksentry.fullname" . }}-secret, key: secret-key }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "attacksentry.fullname" . }}-secret, key: db-password }
+            - name: SENTRY_DATABASE_URL
+              value: "postgresql+psycopg://{{ .Values.database.user }}:$(DB_PASSWORD)@{{ include "attacksentry.fullname" . }}-db:5432/{{ .Values.database.name }}"
+            - name: SENTRY_TIMESCALE_ENABLED
+              value: "true"
+            - name: NATS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "attacksentry.fullname" . }}-secret, key: nats-password }
+            - name: SENTRY_NATS_URL
+              value: "nats://{{ .Values.nats.user }}:$(NATS_PASSWORD)@{{ include "attacksentry.fullname" . }}-nats:4222"
+            - name: SENTRY_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "attacksentry.fullname" . }}-secret, key: bootstrap-admin-password }
+            - name: SENTRY_COOKIE_SECURE
+              value: "true"
+            - name: SENTRY_LLM_PROVIDER
+              value: {{ .Values.backend.llm.provider | quote }}
+            - name: SENTRY_LLM_BASE_URL
+              value: {{ .Values.backend.llm.baseUrl | quote }}
+            - name: SENTRY_LLM_MODEL
+              value: {{ .Values.backend.llm.model | quote }}
+            - name: SENTRY_LLM_API_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ include "attacksentry.fullname" . }}-secret, key: llm-api-key }
+            - name: SENTRY_LLM_INCLUDE_SENSITIVE_CONTEXT
+              value: {{ .Values.backend.llm.includeSensitiveContext | quote }}
+            - name: SENTRY_WEBHOOK_URL
+              value: {{ .Values.backend.integrations.webhookUrl | quote }}
+            - name: SENTRY_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ include "attacksentry.fullname" . }}-secret, key: webhook-secret }
+            - name: SENTRY_WEBHOOK_MIN_SEVERITY
+              value: {{ .Values.backend.integrations.webhookMinSeverity | quote }}
+            - name: SENTRY_RESPONSE_MODE
+              value: {{ .Values.backend.response.mode | quote }}
+            - name: SENTRY_RESPONSE_MIN_SEVERITY
+              value: {{ .Values.backend.response.minSeverity | quote }}
+            - name: SENTRY_RESPONSE_MIN_CONFIDENCE
+              value: {{ .Values.backend.response.minConfidence | quote }}
+            - name: SENTRY_RESPONSE_ACTION
+              value: {{ .Values.backend.response.action | quote }}
+            - name: SENTRY_RESPONSE_TTL_MINUTES
+              value: {{ .Values.backend.response.ttlMinutes | quote }}
+            - name: SENTRY_LOG_FORMAT
+              value: "json"
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: sentry-data
+              mountPath: /app/data
+          resources: {{ toYaml .Values.backend.resources | nindent 12 }}
+      volumes:
+        - name: sentry-data
+          {{- if .Values.backend.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "attacksentry.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "attacksentry.fullname" . }}-backend
+  labels: {{- include "attacksentry.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports: [{ port: 8000, targetPort: 8000 }]
+  selector: { app: attacksentry-backend }

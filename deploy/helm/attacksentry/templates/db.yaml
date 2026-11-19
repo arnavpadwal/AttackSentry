@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "attacksentry.fullname" . }}-db
+  labels: {{- include "attacksentry.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "attacksentry.fullname" . }}-db
+  replicas: 1
+  selector:
+    matchLabels: { app: attacksentry-db }
+  template:
+    metadata:
+      labels: { app: attacksentry-db }
+    spec:
+      containers:
+        - name: db
+          image: {{ .Values.database.image }}
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.database.user | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.database.name | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "attacksentry.fullname" . }}-secret
+                  key: db-password
+          ports: [{ containerPort: 5432 }]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests: { storage: {{ .Values.database.storage }} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "attacksentry.fullname" . }}-db
+  labels: {{- include "attacksentry.labels" . | nindent 4 }}
+spec:
+  ports: [{ port: 5432, targetPort: 5432 }]
+  selector: { app: attacksentry-db }

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+attacksentry.db
+tests/
+.git/
+.env

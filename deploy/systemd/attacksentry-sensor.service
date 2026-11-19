@@ -1,0 +1,24 @@
+[Unit]
+Description=AttackSentry sensor (headless capture agent)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/attacksentry/sensor.env
+Environment=SENTRY_HEADLESS=1
+Environment=SENTRY_SUBJECT=sentry.flows
+Environment=SENTRY_DEVICE=any
+# NEVER set SENTRY_KILL_SWITCH=1 unless you understand it blocks ALL outbound traffic.
+ExecStart=/opt/attacksentry/sensor/attacksentry-sensor
+Restart=always
+RestartSec=5
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

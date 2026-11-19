@@ -1,0 +1,69 @@
+# Default values for AttackSentry.
+
+global:
+  environment: production
+  secretKey: ""            # REQUIRED — set via --set or a Secret
+  bootstrapAdminPassword: ""  # REQUIRED
+
+image:
+  repository: attacksentry/backend
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+frontend:
+  image:
+    repository: attacksentry/frontend
+    tag: "1.0.0"
+  replicaCount: 2
+
+backend:
+  # Baselines are stateful; keep one replica unless using an external shared
+  # baseline/state service.
+  replicaCount: 1
+  persistence:
+    enabled: true
+    storage: 20Gi
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: "2", memory: 4Gi }
+  llm:
+    provider: none
+    baseUrl: http://127.0.0.1:1234
+    model: default
+    apiKey: ""
+    includeSensitiveContext: false
+  integrations:
+    webhookUrl: ""
+    webhookSecret: ""
+    webhookMinSeverity: high
+  response:
+    mode: disabled
+    minSeverity: critical
+    minConfidence: 0.9
+    action: isolate_host
+    ttlMinutes: 60
+
+database:
+  image: timescale/timescaledb:2.27.1-pg16
+  user: attacksentry
+  password: ""             # REQUIRED
+  name: attacksentry
+  storage: 50Gi
+
+nats:
+  image: nats:2.14.1-alpine
+  user: attacksentry
+  password: ""             # REQUIRED
+  storage: 5Gi
+
+ingress:
+  enabled: false
+  host: ndr.example.com
+  tlsSecret: ""
+
+service:
+  type: ClusterIP
+
+sensor:
+  enabled: false
+  image: { repository: attacksentry/sensor, tag: "1.0.0" }

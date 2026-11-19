@@ -98,3 +98,13 @@ Thumbs.db
 Sentry/data/
 Sentry/*.db
 *.db-journal
+
+# Private working material (never part of the public release)
+/marketing/
+/Official/
+/notes/
+*.gguf
+
+# Local recordings before encoding
+*.webm
+*.mov

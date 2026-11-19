@@ -1,6 +1,7 @@
 """Settings routes (LLM, thresholds, integrations)."""
 from __future__ import annotations
 
+import asyncio
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -113,7 +114,6 @@ def _apply_runtime(cfg) -> None:
         # The batcher captured the previous provider. Rebuild it so the next
         # incident is triaged with the model the operator just selected.
         from ...llm.batcher import TriageBatcher
-        import asyncio
         old = app_state.pipeline.triage
         app_state.pipeline.triage = (
             TriageBatcher(app_state.llm, app_state.pipeline._persist_playbook)

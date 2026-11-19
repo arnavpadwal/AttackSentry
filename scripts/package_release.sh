@@ -36,7 +36,7 @@ rm -f "$OUTPUT_DIR/platform/scripts/.demo_key"
 find "$OUTPUT_DIR/platform" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$OUTPUT_DIR/platform" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
-cp "$ROOT_DIR/README.md" "$ROOT_DIR/LICENSE" "$OUTPUT_DIR/"
+cp "$ROOT_DIR/README.md" "$ROOT_DIR/LICENSE" "$ROOT_DIR/docs/ARCHITECTURE.md" "$ROOT_DIR/docs/DEPLOYMENT.md" "$ROOT_DIR/docs/API.md" "$ROOT_DIR/docs/SECURITY.md" "$ROOT_DIR/docs/USER_GUIDE.md" "$OUTPUT_DIR/docs/"
 
 (
   cd "$OUTPUT_DIR"

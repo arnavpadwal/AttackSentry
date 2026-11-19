@@ -57,5 +57,7 @@ export function useAlertPlaybook(id: string) {
       return data;
     },
     staleTime: 60_000,
+    // A missing plan is a real state, not a transient failure.
+    retry: false,
   });
 }

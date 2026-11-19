@@ -111,6 +111,15 @@ async def update_alert(alert_id: str, body: AlertStatusUpdate, db: AsyncSession 
 async def get_playbook(alert_id: str, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
     p = (await db.execute(select(Playbook).where(Playbook.detection_id == alert_id))).scalar_one_or_none()
     if not p:
+        # Playbooks are written once per incident, usually against the first
+        # detection. A later correlated detection still needs the same plan.
+        detection = (await db.execute(select(Detection).where(Detection.id == alert_id))).scalar_one_or_none()
+        if detection and detection.incident_id:
+            p = (await db.execute(
+                select(Playbook).where(Playbook.incident_id == detection.incident_id)
+                .order_by(Playbook.created_at.desc()).limit(1)
+            )).scalar_one_or_none()
+    if not p:
         raise HTTPException(404, "No playbook for this alert")
     from .incidents import _is_placeholder_playbook
     if _is_placeholder_playbook(p) and p.incident_id:

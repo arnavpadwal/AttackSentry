@@ -93,3 +93,8 @@ Thumbs.db
 
 # Offline training pipeline and datasets (not part of the public release)
 /Training/
+
+# Runtime state and databases (not source)
+Sentry/data/
+Sentry/*.db
+*.db-journal

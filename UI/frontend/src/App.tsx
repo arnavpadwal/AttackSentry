@@ -39,12 +39,12 @@ function App() {
       <Sidebar />
       <div
         className={sidebarCollapsed
-          ? 'flex flex-1 flex-col overflow-hidden transition-[margin] duration-200 md:ml-14'
-          : 'flex flex-1 flex-col overflow-hidden transition-[margin] duration-200 md:ml-[232px]'}
+          ? 'flex flex-1 flex-col overflow-hidden transition-[margin] duration-200 md:ml-[52px]'
+          : 'flex flex-1 flex-col overflow-hidden transition-[margin] duration-200 md:ml-[224px]'}
       >
         <TopBar />
         <main ref={mainRef} className="flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-[1680px] px-4 py-5 sm:px-6 lg:px-8">
+          <div className="mx-auto w-full max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">
             <Outlet />
           </div>
         </main>

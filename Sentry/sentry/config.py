@@ -86,6 +86,11 @@ class Settings(BaseSettings):
     response_action: str = "dynamic"
     response_ttl_minutes: int = 60
     response_auto_resolve: bool = False
+    # simulate: record and dispatch to the console only.
+    # nftables: also enforce on this host (requires root and the nft binary).
+    enforcement_mode: str = "simulate"
+    response_max_auto_per_10m: int = 10
+    response_ttl_max_minutes: int = 1440
 
     # --- LLM ---
     llm_provider: str = "openai"  # openai | anthropic | none

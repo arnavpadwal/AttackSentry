@@ -10,9 +10,11 @@ from typing import Optional, Tuple
 
 # family keyword -> (tactic, technique, description)
 _FAMILY_MAP = [
-    (("ddos", "reflection", "amplification", "flood"), ("Impact", "T1498", "Network Denial of Service")),
+    (("reflection", "amplification"), ("Impact", "T1498.002", "Reflection Amplification")),
+    (("ddos", "flood"), ("Impact", "T1498", "Network Denial of Service")),
     (("botnet", "c2", "beacon", "irc"), ("Command and Control", "T1071", "Application Layer Protocol")),
     (("brute force", "bruteforce", "brute-force"), ("Credential Access", "T1110", "Brute Force")),
+    (("service exploit", "remote service", "smb exploit"), ("Lateral Movement", "T1210", "Exploitation of Remote Services")),
     (("sqli", "xss", "web attack", "infiltration", "exploit public"), ("Initial Access", "T1190", "Exploit Public-Facing Application")),
     (("exfiltration", "exfil"), ("Exfiltration", "T1041", "Exfiltration Over C2 Channel")),
     (("scan", "port scan", "recon", "discovery"), ("Discovery", "T1046", "Network Service Discovery")),

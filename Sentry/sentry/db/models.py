@@ -179,6 +179,7 @@ class Playbook(Base):
     confidence: Mapped[str] = mapped_column(String, default="medium")
     mitre_attack: Mapped[dict] = mapped_column(JSON, default=dict)
     steps: Mapped[list] = mapped_column(JSON, default=list)
+    sources: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     false_positive_assessment: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_fallback: Mapped[bool] = mapped_column(Boolean, default=False)
 

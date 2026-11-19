@@ -1,142 +1,413 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useMemo, type ReactNode } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, Inbox, ServerOff, ShieldCheck } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
+import PageHeader from '@/components/shared/PageHeader';
+import Metric from '@/components/shared/Metric';
 import Card from '@/components/shared/Card';
 import Badge from '@/components/shared/Badge';
+import Button from '@/components/shared/Button';
+import EmptyState from '@/components/shared/EmptyState';
 import Gauge from '@/components/shared/Gauge';
+import SeverityBadge from '@/components/shared/SeverityBadge';
 import { useHost, useHostAnomalyHistory, useHostAlerts } from '@/queries/hosts';
 import { useIncidents } from '@/queries/incidents';
 import { useNetworkGraph } from '@/queries/network';
-import { displayFamily, parseTimestamp, relativeTime } from '@/lib/utils';
-import { ArrowLeft } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts';
+import { displayFamily, parseTimestamp, relativeTime, cn } from '@/lib/utils';
+import type { Alert } from '@/types';
+
+type RiskBand = 'critical' | 'high' | 'medium' | 'low';
+
+const RISK_LABEL: Record<RiskBand, string> = {
+  critical: 'Critical',
+  high: 'High',
+  medium: 'Medium',
+  low: 'Low',
+};
+
+const SEVERITY_RAIL: Record<string, string> = {
+  critical: 'border-severity-critical',
+  high: 'border-severity-high',
+  medium: 'border-severity-medium',
+  low: 'border-severity-low',
+  info: 'border-severity-info',
+};
+
+function riskValue(score: number): number {
+  return Math.max(0, Math.min(100, Math.round(score || 0)));
+}
+
+function riskBand(score: number): RiskBand {
+  const value = riskValue(score);
+  if (value >= 75) return 'critical';
+  if (value >= 50) return 'high';
+  if (value >= 25) return 'medium';
+  return 'low';
+}
+
+function DetailsRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="shrink-0 text-[11.5px] text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 truncate text-right text-[11.5px] text-foreground/90">{children}</dd>
+    </div>
+  );
+}
 
 export default function HostDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { data: host } = useHost(id!);
+  const { data: host, isLoading, isError, refetch } = useHost(id!);
   const { data: anomaly } = useHostAnomalyHistory(id!, '24h');
   const { data: hostAlerts } = useHostAlerts(id!);
   const { data: incidents } = useIncidents();
   const { data: graph } = useNetworkGraph();
 
-  if (!host) return <p className="p-8 text-center text-ink-faint">Host not found</p>;
+  const hourly = useMemo(() => {
+    const buckets = new Array(24).fill(0) as number[];
+    const now = Date.now();
+    for (const timestamp of anomaly?.timestamps ?? []) {
+      const ts = timestamp < 1e12 ? timestamp * 1000 : timestamp;
+      const hoursAgo = Math.floor((now - ts) / 3_600_000);
+      if (hoursAgo >= 0 && hoursAgo < 24) buckets[23 - hoursAgo] += 1;
+    }
+    return buckets;
+  }, [anomaly]);
 
-  const hostIncidents = incidents?.filter((i) => i.entity === host.ip_address) ?? [];
-  const anomalyData = anomaly?.timestamps.map((t, i) => ({ t: new Date(t * 1000).toLocaleTimeString(), score: anomaly.values[i] })) ?? [];
+  if (isLoading) return <HostDetailSkeleton />;
+
+  if (isError || !host) {
+    return (
+      <div className="space-y-4">
+        <BackLink />
+        <div className="panel">
+          <EmptyState
+            icon={ServerOff}
+            title={isError ? 'Asset could not be loaded' : 'Asset not found'}
+            description={isError
+              ? 'The console could not reach the inventory API for this host. Check the core service, then retry.'
+              : 'This host is no longer in the inventory. It may have aged out of retention.'}
+            action={(
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={() => navigate('/hosts')}>Back to assets</Button>
+                {isError && <Button size="sm" onClick={() => refetch()}>Retry</Button>}
+              </div>
+            )}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  const risk = riskValue(host.risk_score);
+  const band = riskBand(host.risk_score);
+  const riskLabel = RISK_LABEL[band];
+  const hostIncidents = incidents?.filter((incident) => incident.entity === host.ip_address) ?? [];
+  const openIncidents = hostIncidents.filter((incident) => incident.status !== 'resolved').length;
+  const recentDetections = hostAlerts?.slice(0, 12) ?? [];
+  const activityTotal = hourly.reduce((sum, value) => sum + value, 0);
+  const activityPeak = Math.max(1, ...hourly);
+  const graphNode = graph?.nodes.find((node) => node.ip === host.ip_address);
+  const lastSeen = host.last_seen ? parseTimestamp(host.last_seen) : null;
+  const firstSeen = host.created_at ? parseTimestamp(host.created_at) : null;
 
   const related = (graph?.edges ?? [])
-    .filter((e) => e.src === host.ip_address || e.dst === host.ip_address)
-    .map((e) => (e.src === host.ip_address ? e.dst : e.src))
-    .filter((ip: string, i: number, a: string[]) => a.indexOf(ip) === i)
+    .filter((edge) => edge.src === host.ip_address || edge.dst === host.ip_address)
+    .map((edge) => (edge.src === host.ip_address ? edge.dst : edge.src))
+    .filter((ip: string, index: number, all: string[]) => all.indexOf(ip) === index)
     .slice(0, 10);
 
+  const peerOf = (alert: Alert) => (alert.src_ip === host.ip_address ? alert.dst_ip : alert.src_ip);
+
   return (
-    <div className="animate-fade-in space-y-6">
-      <button onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-ink-2 hover:text-ink">
-        <ArrowLeft size={16} /> Back
-      </button>
+    <div className="space-y-4">
+      <BackLink />
 
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="page-title">{host.hostname || host.ip_address}</h1>
-            <Badge variant={host.risk_score >= 75 ? 'critical' : host.risk_score >= 40 ? 'high' : host.risk_score >= 15 ? 'medium' : 'low'}>
-              {host.risk_score >= 40 ? 'elevated' : 'normal'}
-            </Badge>
-          </div>
-          <p className="page-subtitle">{host.ip_address} · {host.group_name ?? 'Unknown group'} · {host.os_info ?? 'unknown OS'}</p>
-        </div>
-        <Gauge value={host.risk_score} size={110} label="Entity risk" />
+      <PageHeader
+        title={host.hostname || host.ip_address}
+        meta={(
+          <>
+            {host.hostname && <span className="mono text-[11.5px] text-muted-foreground">{host.ip_address}</span>}
+            <Badge variant={band} dot>{riskLabel} risk</Badge>
+          </>
+        )}
+        description={[host.device_type ?? host.identity, host.group_name, host.os_info].filter(Boolean).join(' · ') || 'No role, group, or OS recorded.'}
+      />
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Metric label="Risk score" value={risk} hint={`${riskLabel} · 0-100`} tone={band} />
+        <Metric label="Detections" value={host.alert_count} hint="last 24 hours" />
+        <Metric
+          label="Open incidents"
+          value={incidents ? openIncidents : '—'}
+          hint={incidents ? `${hostIncidents.length} linked` : 'loading incidents'}
+        />
+        <Metric
+          label="First seen"
+          value={firstSeen ? new Date(firstSeen).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
+          hint="first observation"
+        />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card title="Anomaly history (24h)" className="lg:col-span-2">
-          <ResponsiveContainer width="100%" height={180}>
-            <LineChart data={anomalyData}>
-              <XAxis dataKey="t" hide />
-              <YAxis hide />
-              <Tooltip contentStyle={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 12 }} />
-              <Line type="monotone" dataKey="score" stroke="var(--color-accent)" strokeWidth={1.5} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </Card>
-
-        <Card title="Identity & context">
-          <dl className="space-y-2.5 text-sm">
-            <div className="flex justify-between"><dt className="text-ink-faint">Identity</dt><dd className="text-ink">{host.identity ?? '—'}</dd></div>
-            <div className="flex justify-between"><dt className="text-ink-faint">Device type</dt><dd className="text-ink">{host.device_type ?? '—'}</dd></div>
-            <div className="flex justify-between"><dt className="text-ink-faint">OS</dt><dd className="text-ink">{host.os_info ?? '—'}</dd></div>
-            <div className="flex justify-between"><dt className="text-ink-faint">Status</dt><dd className="text-ink">{host.status}</dd></div>
-            <div className="flex justify-between"><dt className="text-ink-faint">Baseline</dt><dd className="text-ink">{host.baseline_status}</dd></div>
-            <div className="flex justify-between"><dt className="text-ink-faint">Last seen</dt><dd className="text-ink">{host.last_seen ? relativeTime(parseTimestamp(host.last_seen)) : '—'}</dd></div>
-          </dl>
-        </Card>
-      </div>
-
-      <Card title="Why this host is scored this way" subtitle="Signals contributing to the current entity risk score">
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div className="rounded-lg bg-surface-subtle p-3"><p className="text-xs text-ink-faint">Current risk</p><p className="mt-1 text-lg font-semibold text-ink">{host.risk_score.toFixed(0)} / 100</p></div>
-          <div className="rounded-lg bg-surface-subtle p-3"><p className="text-xs text-ink-faint">Detections (24h)</p><p className="mt-1 text-lg font-semibold text-ink">{host.alert_count}</p></div>
-          <div className="rounded-lg bg-surface-subtle p-3"><p className="text-xs text-ink-faint">Incidents</p><p className="mt-1 text-lg font-semibold text-ink">{host.incident_count}</p></div>
-        </div>
-        <p className="mt-4 text-sm leading-6 text-ink-2">Risk combines anomaly deviation from the host baseline, calibrated detection confidence, incident recurrence, and peer context. The most recent contributing reasons are shown below.</p>
-        {hostAlerts?.slice(0, 3).map((a) => <div key={a.id} className="mt-3 rounded-lg border border-border p-3"><div className="flex items-center justify-between gap-3"><span className="text-sm font-medium text-ink">{a.detection_type}</span><Badge variant={a.severity}>{a.severity}</Badge></div><p className="mt-1 text-xs leading-5 text-ink-faint">{a.reason || 'Behavioral deviation detected against the learned baseline.'}</p></div>)}
-      </Card>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card title={`Incidents (${hostIncidents.length})`} className="lg:col-span-2" noPadding>
-          {hostIncidents.length ? (
-            <table className="dense-table w-full">
-              <thead>
-                <tr className="border-b border-border">
-                  <th className="px-5 py-2 text-left">Severity</th>
-                  <th className="px-5 py-2 text-left">Family</th>
-                  <th className="px-5 py-2 text-right">Count</th>
-                  <th className="px-5 py-2 text-right">Last seen</th>
-                </tr>
-              </thead>
-              <tbody>
-                {hostIncidents.map((i) => (
-                  <tr key={i.id} className="border-b border-border last:border-0">
-                    <td className="px-5 py-2"><Badge variant={i.severity}>{i.severity}</Badge></td>
-                    <td className="px-5 py-2 text-ink">{displayFamily(i.family)}</td>
-                    <td className="px-5 py-2 text-right text-ink">{i.count}</td>
-                    <td className="px-5 py-2 text-right text-ink-faint">{relativeTime(parseTimestamp(i.last_seen))}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <p className="p-6 text-center text-sm text-ink-faint">No incidents for this entity</p>}
-        </Card>
-
-        <Card title="Recent detections" noPadding>
-          {hostAlerts?.length ? (
-            <ul className="divide-y divide-border">
-              {hostAlerts.slice(0, 6).map((a) => (
-                <li key={a.id} className="flex cursor-pointer items-center justify-between px-4 py-2 hover:bg-surface-subtle" onClick={() => navigate(`/alerts/${a.id}`)}>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm text-ink">{a.detection_type}</p>
-                    <p className="text-xs text-ink-faint">{relativeTime(parseTimestamp(a.timestamp))}</p>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="space-y-4 lg:col-span-2">
+          <Card
+            title="Recent detections"
+            subtitle={hostAlerts ? `${hostAlerts.length} recorded for this asset` : 'Loading detections'}
+            noPadding
+          >
+            {hostAlerts === undefined ? (
+              <div className="p-4">
+                {Array.from({ length: 5 }).map((_, index) => (
+                  <div key={index} className="flex items-center gap-3 py-1.5">
+                    <Skeleton className="h-1.5 w-1.5 rounded-full" />
+                    <Skeleton className="h-3 w-32" />
+                    <Skeleton className="ml-auto h-3 w-20" />
+                    <Skeleton className="h-3 w-10" />
                   </div>
-                  <Badge variant={a.severity}>{a.severity}</Badge>
-                </li>
-              ))}
-            </ul>
-          ) : <p className="p-6 text-center text-sm text-ink-faint">No detections</p>}
-        </Card>
-      </div>
+                ))}
+              </div>
+            ) : recentDetections.length ? (
+              <div className="overflow-x-auto">
+                <table className="table-shell">
+                  <thead>
+                    <tr>
+                      <th>Severity</th>
+                      <th>Detection</th>
+                      <th>Peer</th>
+                      <th><span className="block text-right" title="Anomaly score">Score</span></th>
+                      <th><span className="block text-right">Time</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentDetections.map((alert) => {
+                      const peer = peerOf(alert);
+                      const time = parseTimestamp(alert.timestamp);
+                      return (
+                        <tr key={alert.id}>
+                          <td className={cn('border-l-2', SEVERITY_RAIL[alert.severity] ?? SEVERITY_RAIL.info)}>
+                            <SeverityBadge severity={alert.severity} />
+                          </td>
+                          <td>
+                            <Link
+                              to={`/alerts/${alert.id}`}
+                              className="text-[12px] font-medium text-foreground underline-offset-4 hover:text-primary hover:underline"
+                            >
+                              {alert.detection_type}
+                            </Link>
+                          </td>
+                          <td><span className="mono text-[11.5px] text-muted-foreground">{peer ?? '—'}</span></td>
+                          <td className="text-right"><span className="text-[12px] tabular-nums text-foreground/85">{alert.anomaly_score.toFixed(2)}</span></td>
+                          <td className="text-right" title={new Date(time).toLocaleString()}>
+                            <span className="text-[11.5px] text-muted-foreground">{relativeTime(time)}</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <EmptyState
+                icon={ShieldCheck}
+                title="No detections recorded"
+                description="This asset has not crossed the detection threshold in the retained window."
+                className="py-10"
+              />
+            )}
+          </Card>
 
-      <Card title="Related entities" subtitle="peers this host has communicated with">
-        {related.length ? (
-          <div className="flex flex-wrap gap-2">
-            {related.map((ip) => (
-              <button key={ip} className="rounded-lg border border-border bg-surface-subtle px-3 py-1.5 text-sm text-ink hover:border-accent"
-                onClick={() => { const n = graph?.nodes.find((x) => x.ip === ip); if (n && !n.external) navigate(`/hosts/${n.id}`); }}>
-                {ip}
-              </button>
+          <Card
+            title="Activity, 24 hours"
+            subtitle="Anomaly events per hour"
+            action={anomaly ? <span className="meta tabular-nums">{activityTotal} events</span> : undefined}
+          >
+            {anomaly === undefined ? (
+              <Skeleton className="h-14 w-full" />
+            ) : (
+              <>
+                <div
+                  className="flex h-14 items-end gap-1"
+                  role="img"
+                  aria-label={`${activityTotal} anomaly events in the last 24 hours`}
+                >
+                  {hourly.map((count, index) => (
+                    <div
+                      key={index}
+                      className="flex h-full flex-1 items-end"
+                      title={`${count} events at ${new Date(Date.now() - (23 - index) * 3_600_000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+                    >
+                      <div
+                        className={cn('w-full rounded-[2px]', count ? 'bg-primary/70' : 'bg-muted')}
+                        style={{ height: count ? `${Math.max(8, (count / activityPeak) * 100)}%` : '2px' }}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-1.5 flex justify-between text-[10.5px] text-muted-foreground">
+                  <span>24h ago</span>
+                  <span>now</span>
+                </div>
+              </>
+            )}
+          </Card>
+
+          <Card title="Related entities" subtitle="Peers observed in the network graph">
+            {related.length ? (
+              <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                {related.map((ip) => {
+                  const node = graph?.nodes.find((candidate) => candidate.ip === ip);
+                  if (node && !node.external) {
+                    return (
+                      <Link
+                        key={ip}
+                        to={`/hosts/${node.id}`}
+                        className="mono text-[11.5px] text-foreground underline-offset-4 hover:text-primary hover:underline"
+                      >
+                        {ip}
+                      </Link>
+                    );
+                  }
+                  return <span key={ip} className="mono text-[11.5px] text-muted-foreground">{ip}</span>;
+                })}
+              </div>
+            ) : (
+              <p className="text-[11.5px] text-muted-foreground">No peer relationships in the current window.</p>
+            )}
+          </Card>
+        </div>
+
+        <aside className="space-y-4">
+          <Card title="Entity risk">
+            <div className="flex justify-center py-1">
+              <Gauge value={risk} size={140} label={`${riskLabel} risk`} />
+            </div>
+          </Card>
+
+          <Card title="Identity">
+            <dl className="space-y-2">
+              <DetailsRow label="Address"><span className="mono text-[11.5px]">{host.ip_address}</span></DetailsRow>
+              <DetailsRow label="Role">{host.device_type || '—'}</DetailsRow>
+              <DetailsRow label="Group">{host.group_name || '—'}</DetailsRow>
+              <DetailsRow label="OS">{host.os_info || '—'}</DetailsRow>
+              <DetailsRow label="Identity">{host.identity || '—'}</DetailsRow>
+              <DetailsRow label="Status">{host.status || '—'}</DetailsRow>
+              <DetailsRow label="Baseline">{host.baseline_status || '—'}</DetailsRow>
+              <DetailsRow label="Exposure">{graphNode ? (graphNode.external ? 'External' : 'Internal') : '—'}</DetailsRow>
+              {graphNode?.vlan && <DetailsRow label="Segment">{graphNode.vlan}</DetailsRow>}
+              <DetailsRow label="Last seen">
+                <span title={lastSeen ? new Date(lastSeen).toLocaleString() : undefined}>
+                  {lastSeen ? relativeTime(lastSeen) : '—'}
+                </span>
+              </DetailsRow>
+            </dl>
+          </Card>
+
+          <Card title="Why this score">
+            <p className="text-[11.5px] leading-[17px] text-muted-foreground">
+              Risk is a 0-100 composite of anomaly deviation from the learned baseline, calibrated
+              detection confidence, incident recurrence, and peer context.
+            </p>
+            {recentDetections.slice(0, 3).map((alert) => (
+              <div key={alert.id} className="mt-3 border-t pt-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <SeverityBadge severity={alert.severity} withLabel={false} />
+                    <span className="truncate text-[11.5px] font-medium text-foreground">{alert.detection_type}</span>
+                  </span>
+                  <span className="shrink-0 text-[10.5px] text-muted-foreground">
+                    {relativeTime(parseTimestamp(alert.timestamp))}
+                  </span>
+                </div>
+                {alert.reason && (
+                  <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">{alert.reason}</p>
+                )}
+              </div>
             ))}
-          </div>
-        ) : <p className="text-sm text-ink-faint">No recent relationships</p>}
-      </Card>
+            {hostAlerts && !recentDetections.length && (
+              <p className="mt-2 text-[11.5px] text-muted-foreground">No contributing detections recorded.</p>
+            )}
+          </Card>
+
+          <Card title="Linked incidents" subtitle={incidents ? `${hostIncidents.length} on this asset` : 'Loading incidents'} noPadding>
+            {incidents === undefined ? (
+              <div className="space-y-2 p-4">
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <div key={index} className="flex items-center gap-2">
+                    <Skeleton className="h-1.5 w-1.5 rounded-full" />
+                    <Skeleton className="h-3 w-28" />
+                    <Skeleton className="ml-auto h-3 w-8" />
+                  </div>
+                ))}
+              </div>
+            ) : hostIncidents.length ? (
+              <ul className="divide-y">
+                {hostIncidents.map((incident) => (
+                  <li key={incident.id}>
+                    <Link
+                      to={`/incidents/${incident.id}`}
+                      className="flex items-center gap-2.5 px-4 py-2 hover:bg-muted/50"
+                    >
+                      <SeverityBadge severity={incident.severity} withLabel={false} />
+                      <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">{displayFamily(incident.family)}</span>
+                      <span className="text-[11px] tabular-nums text-muted-foreground">{incident.count}</span>
+                      <span className="w-[46px] shrink-0 text-right text-[11px] text-muted-foreground">
+                        {relativeTime(parseTimestamp(incident.last_seen))}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState
+                icon={Inbox}
+                title="No linked incidents"
+                description="Detections on this asset have not been correlated into an incident."
+                className="py-8"
+              />
+            )}
+          </Card>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function BackLink() {
+  return (
+    <Link
+      to="/hosts"
+      className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground"
+    >
+      <ArrowLeft size={14} strokeWidth={1.5} />
+      Assets
+    </Link>
+  );
+}
+
+function HostDetailSkeleton() {
+  return (
+    <div className="space-y-4">
+      <Skeleton className="h-3.5 w-16" />
+      <div className="space-y-2">
+        <Skeleton className="h-5 w-56" />
+        <Skeleton className="h-3.5 w-80" />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <Skeleton key={index} className="h-[86px] rounded-lg" />
+        ))}
+      </div>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="space-y-4 lg:col-span-2">
+          <Skeleton className="h-64 rounded-lg" />
+          <Skeleton className="h-32 rounded-lg" />
+        </div>
+        <div className="space-y-4">
+          <Skeleton className="h-52 rounded-lg" />
+          <Skeleton className="h-64 rounded-lg" />
+        </div>
+      </div>
     </div>
   );
 }

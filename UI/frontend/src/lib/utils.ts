@@ -79,7 +79,26 @@ export function formatNumber(n: number): string {
   return n.toString();
 }
 
+/** Canonical incident families, plus legacy internal labels mapped to operator language. */
+const FAMILY_LABELS: Record<string, string> = {
+  ddos: 'DDoS',
+  'credential attack': 'Credential attack',
+  reconnaissance: 'Reconnaissance',
+  'command and control': 'Command and control',
+  exfiltration: 'Exfiltration',
+  'web exploitation': 'Web exploitation',
+  exploitation: 'Exploitation',
+  'behavioral anomaly': 'Behavioral anomaly',
+  // Legacy expert identifiers that may still exist on older stored incidents.
+  rudra: 'DDoS',
+  varuna: 'Web exploitation',
+  maya: 'Command and control',
+  indra: 'Reconnaissance',
+  garuda: 'Exploitation',
+};
+
 /** Hide legacy internal model labels from operator-facing views. */
 export function displayFamily(value: string | null | undefined): string {
-  return value || 'Behavioral anomaly';
+  const key = (value ?? '').trim().toLowerCase();
+  return FAMILY_LABELS[key] ?? 'Behavioral anomaly';
 }

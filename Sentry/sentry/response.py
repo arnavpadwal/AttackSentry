@@ -5,7 +5,7 @@ import ipaddress
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .config import settings
 from .db import session_factory
@@ -13,6 +13,13 @@ from .db.models import Incident, MitigationAction
 
 logger = logging.getLogger("sentry.response")
 SEVERITY = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """SQLite returns naive datetimes; normalise before comparing."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def response_policy_matches(detection: dict) -> bool:
@@ -32,6 +39,7 @@ def new_policy_action(detection: dict) -> MitigationAction:
     now = datetime.now(timezone.utc)
     mode = settings.response_mode
     action, target = recommended_response(detection)
+    ttl = max(5, min(settings.response_ttl_minutes, settings.response_ttl_max_minutes))
     return MitigationAction(
         incident_id=detection["incident_id"],
         entity=target,
@@ -40,8 +48,22 @@ def new_policy_action(detection: dict) -> MitigationAction:
         status="queued" if mode == "automatic" else "pending_approval",
         reason=f"Attack-aware policy: {detection.get('detection_type', 'anomaly')}; {detection['severity']} severity, {detection['confidence']:.1%} confidence",
         requested_by="policy-engine",
-        expires_at=now + timedelta(minutes=settings.response_ttl_minutes),
+        expires_at=now + timedelta(minutes=ttl),
     )
+
+
+_INTERNAL_NETS = tuple(
+    ipaddress.ip_network(value)
+    for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16")
+)
+
+
+def _private(address: str) -> bool:
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(parsed in network for network in _INTERNAL_NETS)
 
 
 def recommended_response(detection: dict) -> tuple[str, str]:
@@ -55,7 +77,22 @@ def recommended_response(detection: dict) -> tuple[str, str]:
         return "rate_limit", dst or src
     if "brute" in attack or "scan" in attack or "probing" in attack:
         return "block_ip", src
-    return "isolate_host", src
+    # Isolating an external address is meaningless; block it at the edge.
+    if _private(src):
+        return "isolate_host", src
+    return "block_ip", src
+
+
+async def auto_action_budget_available(db) -> bool:
+    """Cap runaway automatic controls: N per rolling 10 minutes."""
+    since = datetime.now(timezone.utc) - timedelta(minutes=10)
+    count = (await db.execute(
+        select(func.count()).select_from(MitigationAction).where(
+            MitigationAction.mode == "automatic",
+            MitigationAction.created_at >= since,
+        )
+    )).scalar() or 0
+    return count < max(1, settings.response_max_auto_per_10m)
 
 
 async def dispatch_mitigation(action_id: str, dispatcher) -> None:
@@ -64,7 +101,7 @@ async def dispatch_mitigation(action_id: str, dispatcher) -> None:
         action = (await db.execute(select(MitigationAction).where(MitigationAction.id == action_id))).scalar_one_or_none()
         if not action or action.status not in {"queued", "retrying"}:
             return
-        if action.expires_at and action.expires_at < datetime.now(timezone.utc):
+        if _as_utc(action.expires_at) and _as_utc(action.expires_at) < datetime.now(timezone.utc):
             action.status = "expired"
             await db.commit()
             return

@@ -16,10 +16,12 @@ from ..core.mitre import mitre_for
 from ..db import session_factory
 from ..db.models import Detection, FlowLog, Host, Incident, MitigationAction, Playbook, Sensor
 from ..integrations import WebhookDispatcher
+from ..integrations.local_enforce import ResponseDispatcher
 from ..llm.batcher import TriageBatcher
 from ..metrics import FLOWS_INGESTED, INCIDENTS_CREATED, INGEST_QUEUE_DEPTH
 from ..response import (
     SEVERITY,
+    auto_action_budget_available,
     dispatch_mitigation,
     dispatch_release,
     new_policy_action,
@@ -40,6 +42,7 @@ class IngestionPipeline:
         self._traffic_accum: Dict[str, float] = {"bytes": 0.0, "packets": 0.0, "flows": 0.0}
         self._last_traffic_emit = time.time()
         self.webhooks = WebhookDispatcher()
+        self.response_dispatch = ResponseDispatcher(self.webhooks)
         self._background_tasks: set[asyncio.Task] = set()
         self._response_reconciler: Optional[asyncio.Task] = None
         self.triage: Optional[TriageBatcher] = (
@@ -284,13 +287,27 @@ class IngestionPipeline:
 
             mitigation = None
             if response_policy_matches(detection):
-                selected_action, _ = recommended_response(detection)
+                selected_action, selected_target = recommended_response(detection)
                 existing = (await db.execute(select(MitigationAction).where(
                     MitigationAction.incident_id == detection["incident_id"],
                     MitigationAction.action == selected_action,
                     MitigationAction.status.in_(["pending_approval", "queued", "dispatched"]),
                 ))).scalar_one_or_none()
                 if not existing:
+                    # Entity-level dedupe: a storm must not queue the same
+                    # control repeatedly under different incidents.
+                    existing = (await db.execute(select(MitigationAction).where(
+                        MitigationAction.entity == selected_target,
+                        MitigationAction.action == selected_action,
+                        MitigationAction.status.in_(["pending_approval", "queued", "dispatched"]),
+                    ))).scalar_one_or_none()
+                allowed = True
+                if not existing and settings.response_mode == "automatic":
+                    allowed = await auto_action_budget_available(db)
+                    if not allowed:
+                        logger.warning("Automatic response budget exhausted; holding %s for %s",
+                                       selected_action, selected_target)
+                if not existing and allowed:
                     mitigation = new_policy_action(detection)
                     db.add(mitigation)
                     await db.commit()
@@ -301,6 +318,34 @@ class IngestionPipeline:
             # per flow.
             if detection.get("fidelity_action") in {"create", "merge"} and self.triage:
                 self.triage.enqueue(d.id, detection)
+
+            # Every incident opens with a deterministic, grounded plan. The AI
+            # assessment replaces it when the batcher completes, so the console
+            # never shows an empty playbook panel.
+            if detection.get("fidelity_action") in {"create", "escalate"}:
+                has_plan = await db.scalar(
+                    select(Playbook.id).where(Playbook.incident_id == detection["incident_id"]).limit(1)
+                )
+                if not has_plan:
+                    from ..llm.service import provisional_playbook
+                    try:
+                        plan = provisional_playbook(detection)
+                        db.add(Playbook(
+                            detection_id=d.id,
+                            incident_id=detection["incident_id"],
+                            attack_summary=plan.get("attack_summary", ""),
+                            technical_analysis=plan.get("technical_analysis"),
+                            severity=plan.get("severity", detection.get("severity", "medium")),
+                            confidence=plan.get("confidence", "medium"),
+                            mitre_attack=plan.get("mitre_attack", {}),
+                            steps=plan.get("playbook", []),
+                            sources=plan.get("sources", []),
+                            false_positive_assessment=plan.get("false_positive_assessment"),
+                            is_fallback=True,
+                        ))
+                        await db.commit()
+                    except Exception:
+                        logger.exception("Provisional playbook could not be stored")
 
             if detection.get("fidelity_action") in {"create", "escalate"}:
                 severity = detection.get("severity", "low")
@@ -315,9 +360,8 @@ class IngestionPipeline:
                         "fidelity_action": detection.get("fidelity_action"),
                     })
             if mitigation and mitigation.status == "queued":
-                task = asyncio.create_task(dispatch_mitigation(mitigation.id, self.webhooks))
-                self._background_tasks.add(task)
-                task.add_done_callback(self._background_tasks.discard)
+                task = asyncio.create_task(dispatch_mitigation(mitigation.id, self.response_dispatch))
+                self._track(task)
 
             return alert_event
 
@@ -351,6 +395,17 @@ class IngestionPipeline:
         if result.rowcount:
             logger.info("Retention pruned %d flow records older than %s", result.rowcount, cutoff.date())
 
+    def _track(self, task: asyncio.Task) -> None:
+        """Keep a reference and surface failures instead of dropping them."""
+        self._background_tasks.add(task)
+
+        def _done(finished: asyncio.Task) -> None:
+            self._background_tasks.discard(finished)
+            if not finished.cancelled() and finished.exception():
+                logger.error("Background response task failed: %s", finished.exception())
+
+        task.add_done_callback(_done)
+
     async def _reconcile_response_expiry(self) -> None:
         while self._running:
             try:
@@ -367,7 +422,16 @@ class IngestionPipeline:
                     if rows:
                         await db.commit()
                 for action_id in ids:
-                    await dispatch_release(action_id, self.webhooks)
+                    await dispatch_release(action_id, self.response_dispatch)
+                # Recover automatic controls left queued by a crash or restart.
+                async with session_factory() as db:
+                    stuck = (await db.execute(select(MitigationAction.id).where(
+                        MitigationAction.mode == "automatic",
+                        MitigationAction.status == "queued",
+                        MitigationAction.created_at <= now - timedelta(seconds=60),
+                    ).limit(20))).scalars().all()
+                for action_id in stuck:
+                    await dispatch_mitigation(action_id, self.response_dispatch)
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -394,6 +458,7 @@ class IngestionPipeline:
                 confidence=playbook.get("confidence", "medium"),
                 mitre_attack=playbook.get("mitre_attack", {}),
                 steps=playbook.get("playbook", []),
+                sources=playbook.get("sources", []),
                 false_positive_assessment=playbook.get("false_positive_assessment"),
                 is_fallback="_llm_error" in playbook,
             ))

@@ -143,12 +143,8 @@ async def generate_incident_playbook(
     )).scalar_one_or_none()
     if existing and not _is_placeholder_playbook(existing):
         return PlaybookOut.model_validate(existing)
-    if _is_placeholder_playbook(existing):
-        # A fallback is intentionally provisional.  Once the local model is
-        # available, replace it instead of making the analyst stare at an old
-        # "LLM offline" result forever.
-        await db.execute(delete(Playbook).where(Playbook.id == existing.id))
-        await db.commit()
+    # Keep the provisional plan visible while the new assessment is written;
+    # deleting it first leaves a window where the console shows "no plan".
 
     incident = (await db.execute(select(Incident).where(Incident.id == incident_id))).scalar_one_or_none()
     detection = (await db.execute(
@@ -192,6 +188,11 @@ async def generate_incident_playbook(
     )).scalar_one_or_none()
     if not p:
         raise HTTPException(502, "Assessment generation did not return a playbook")
+    if not _is_placeholder_playbook(p):
+        # Drop the provisional rows now that a real assessment exists.
+        await db.execute(delete(Playbook).where(
+            Playbook.incident_id == incident_id, Playbook.is_fallback.is_(True)
+        ))
     add_audit(db, user, "incident.playbook_generated", f"incident:{incident_id}", {})
     await db.commit()
     return PlaybookOut.model_validate(p)

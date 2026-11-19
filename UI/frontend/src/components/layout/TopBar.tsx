@@ -1,9 +1,9 @@
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import {
   useAuthStore, useAlertStreamStore, useSentryStatusStore, useUIStore,
 } from '@/stores';
-import { Bell, LogOut, Moon, Sun, Search, ChevronDown, ShieldAlert, Menu, Command } from 'lucide-react';
+import { Bell, LogOut, Moon, Sun, Search, ChevronDown, Menu, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -11,19 +11,8 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Badge } from '@/components/ui/badge';
 import { parseTimestamp, relativeTime, cn } from '@/lib/utils';
-
-const ROUTE_TITLES: Record<string, string> = {
-  '/': 'Overview',
-  '/threats': 'Incident queue',
-  '/hosts': 'Assets & entities',
-  '/network': 'Network analytics',
-  '/devices': 'Device control',
-  '/response': 'Response center',
-  '/reports': 'Reports',
-  '/settings': 'Settings',
-};
+import { severityDot } from '@/components/shared/SeverityBadge';
 
 export default function TopBar() {
   const user = useAuthStore((s) => s.user);
@@ -36,7 +25,6 @@ export default function TopBar() {
   const setTheme = useUIStore((s) => s.setTheme);
   const setMobileNav = useUIStore((s) => s.setMobileNav);
   const navigate = useNavigate();
-  const location = useLocation();
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -64,91 +52,89 @@ export default function TopBar() {
   };
 
   const recent = liveAlerts.slice(0, 6);
-  const pageTitle = ROUTE_TITLES[location.pathname] ?? (location.pathname.startsWith('/incidents/') ? 'Incident detail' : location.pathname.startsWith('/alerts/') ? 'Detection detail' : 'Workspace');
 
   return (
-    <header className="sticky top-0 z-30 flex h-[52px] shrink-0 items-center justify-between gap-3 border-b bg-card/95 px-3 backdrop-blur sm:px-5">
-      <div className="flex min-w-0 flex-1 items-center gap-3">
+    <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center justify-between gap-3 border-b bg-background px-3 sm:px-5">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobileNav(true)} aria-label="Open navigation">
-          <Menu size={17} />
+          <Menu size={16} strokeWidth={1.5} />
         </Button>
-        <div className="hidden min-w-0 items-center gap-2 text-[12px] sm:flex">
-          <span className="text-muted-foreground">AttackSentry</span>
-          <span className="text-muted-foreground/40">/</span>
-          <span className="truncate font-medium text-foreground">{pageTitle}</span>
-        </div>
-        <div className="flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-[11px]">
-          <span className={cn('h-1.5 w-1.5 rounded-full', mode === 'active' ? 'live-dot bg-primary' : 'bg-severity-medium')} />
-          <span className="font-medium capitalize">{mode === 'active' ? 'Active' : mode}</span>
-        </div>
-        <form onSubmit={submitSearch} className="relative hidden w-full max-w-[340px] lg:block">
-          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+
+        <form onSubmit={submitSearch} className="relative hidden w-full max-w-[320px] md:block">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" strokeWidth={1.5} />
           <Input
             ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search hosts, incidents, detections"
-            aria-label="Search hosts, incidents, and detections"
-            className="pl-8 pr-14"
+            placeholder="Search hosts, detections, incidents"
+            aria-label="Search hosts, detections, and incidents"
+            className="h-8 bg-card pl-8 pr-12"
           />
-          <span className="kbd pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 lg:flex">
-            <Command size={9} /> K
-          </span>
+          <kbd className="kbd pointer-events-none absolute right-2 top-1/2 hidden min-w-9 -translate-y-1/2 justify-center whitespace-nowrap lg:inline-flex">⌘K</kbd>
         </form>
+
+        <div className="ml-auto flex items-center gap-2 md:ml-1">
+          <div className="hidden items-center gap-1.5 rounded-[6px] border px-2 py-1 sm:flex">
+            <span className={cn('h-1.5 w-1.5 rounded-full', mode === 'active' ? 'bg-primary live-dot' : 'bg-severity-medium')} />
+            <span className="text-[11px] font-medium capitalize leading-4 text-foreground">{mode}</span>
+          </div>
+          <span className="hidden text-[11px] text-muted-foreground lg:inline">On-premises</span>
+        </div>
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5">
-        <Button variant="ghost" size="icon" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Toggle theme" aria-label="Toggle theme">
-          {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          aria-label="Toggle theme"
+        >
+          {theme === 'dark' ? <Sun size={16} strokeWidth={1.5} /> : <Moon size={16} strokeWidth={1.5} />}
         </Button>
 
-        <DropdownMenu>
+        <DropdownMenu onOpenChange={(open) => { if (open) markAllRead(); }}>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="relative" aria-label="Notifications">
-              <Bell size={16} />
+            <Button variant="ghost" size="icon" className="relative" aria-label="Detections">
+              <Bell size={16} strokeWidth={1.5} />
               {unreadCount > 0 && (
-                <span className="absolute right-1 top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-semibold text-primary-foreground">
-                  {unreadCount > 99 ? '99+' : unreadCount}
-                </span>
+                <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-severity-critical" />
               )}
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-[340px]">
-            <DropdownMenuLabel className="flex items-center justify-between">
+          <DropdownMenuContent align="end" className="w-[320px] p-0">
+            <DropdownMenuLabel className="flex items-center justify-between px-3 py-2 text-[11px] font-medium text-muted-foreground">
               <span>Live detections</span>
-              {unreadCount > 0 && (
-                <button onClick={markAllRead} className="text-[11px] font-normal text-primary hover:underline">Mark all read</button>
-              )}
+              <span className="tabular-nums">{unreadCount > 0 ? `${unreadCount} new` : 'Up to date'}</span>
             </DropdownMenuLabel>
-            <DropdownMenuSeparator />
+            <DropdownMenuSeparator className="my-0" />
             {recent.length ? (
-              <div className="max-h-72 overflow-y-auto">
+              <div className="max-h-72 overflow-y-auto p-1">
                 {recent.map((a) => (
                   <button
                     key={a.id}
-                    className="flex w-full items-start gap-2.5 rounded-md px-2 py-2 text-left hover:bg-muted"
-                    onClick={() => { markAllRead(); navigate(`/alerts/${a.id}`); }}
+                    className="flex w-full items-start gap-2.5 rounded-[6px] px-2 py-1.5 text-left hover:bg-muted"
+                    onClick={() => navigate(`/alerts/${a.id}`)}
                   >
-                    <ShieldAlert size={14} className="mt-0.5 shrink-0 text-muted-foreground" />
+                    <span className={cn('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', severityDot[a.severity] ?? severityDot.info)} />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-[12px] text-foreground">{a.detection_type}</p>
-                      <p className="truncate text-[11px] text-muted-foreground">{a.src_ip} · {relativeTime(parseTimestamp(a.timestamp))}</p>
+                      <p className="truncate text-[12px] leading-4 text-foreground">{a.detection_type}</p>
+                      <p className="truncate text-[11px] leading-4 text-muted-foreground">{a.src_ip} · {relativeTime(parseTimestamp(a.timestamp))}</p>
                     </div>
-                    <Badge variant={a.severity === 'critical' ? 'destructive' : 'secondary'} className="shrink-0">{a.severity}</Badge>
                   </button>
                 ))}
               </div>
             ) : (
-              <p className="px-2 py-6 text-center text-[12px] text-muted-foreground">No live detections</p>
+              <p className="px-3 py-8 text-center text-[11.5px] text-muted-foreground">No live detections</p>
             )}
           </DropdownMenuContent>
         </DropdownMenu>
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="ml-1 flex items-center gap-1.5 rounded-md p-1 text-[12px] hover:bg-muted">
+            <button className="ml-1 flex items-center gap-1.5 rounded-[6px] p-1 text-[12px] hover:bg-muted">
               <Avatar className="h-6 w-6">
-                <AvatarFallback className="bg-primary text-[10px] text-primary-foreground">
+                <AvatarFallback className="bg-secondary text-[10px] font-medium text-secondary-foreground">
                   {user?.username?.[0]?.toUpperCase() ?? 'U'}
                 </AvatarFallback>
               </Avatar>
@@ -162,12 +148,14 @@ export default function TopBar() {
               <p className="text-[11px] font-normal capitalize text-muted-foreground">{user?.role}</p>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => navigate('/settings')}>Settings</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate('/settings')}>
+              <Settings size={14} strokeWidth={1.5} /> Settings
+            </DropdownMenuItem>
             <DropdownMenuItem
               className="text-destructive focus:text-destructive"
               onClick={() => { logout(); navigate('/login'); }}
             >
-              <LogOut size={14} /> Sign out
+              <LogOut size={14} strokeWidth={1.5} /> Sign out
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

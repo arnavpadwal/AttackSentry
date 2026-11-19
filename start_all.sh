@@ -60,10 +60,16 @@ echo "========================================"
 echo " Starting AttackSentry Platform"
 echo "========================================"
 
-# 1. llama.cpp — OpenAI-compatible server used by AI triage.
+# 1. Local model server. Prefer an already-running OpenAI-compatible server
+# (for example the `llm` CLI), then fall back to launching bundled llama.cpp.
+LLM_BASE="$(env_value SENTRY_LLM_BASE_URL)"
+LLM_BASE="${LLM_BASE:-http://127.0.0.1:8081}"
 LLAMA_BIN="${LLAMA_SERVER:-$(command -v llama-server || true)}"
 LLAMA_MODEL="${SENTRY_LLAMA_MODEL:-$HOME/.lmstudio/models/lmstudio-community/Qwen3.5-2B-GGUF/Qwen3.5-2B-Q4_K_M.gguf}"
-if [[ -n "$LLAMA_BIN" && -f "$LLAMA_MODEL" ]]; then
+if curl -fsS --max-time 3 "$LLM_BASE/v1/models" >/dev/null 2>&1; then
+    LLM_PORT="${LLM_BASE##*:}"
+    echo "[1/3] Using local model server at $LLM_BASE (model: $LLM_ALIAS)"
+elif [[ -n "$LLAMA_BIN" && -f "$LLAMA_MODEL" ]]; then
     for candidate in "${SENTRY_LLAMA_PORT:-1234}" 1234 1235 1236 1237 1238; do
         if ! port_busy "$candidate"; then LLM_PORT="$candidate"; break; fi
     done
@@ -88,8 +94,8 @@ if [[ -n "$LLAMA_BIN" && -f "$LLAMA_MODEL" ]]; then
         echo "[1/3] No free port for llama.cpp — AI triage will use fallback playbooks."
     fi
 else
-    echo "[1/3] llama-server or model not found — AI triage will use fallback playbooks."
-    echo "      Set SENTRY_LLAMA_MODEL=/path/to/model.gguf to override."
+    echo "[1/3] No local model server and llama-server/model not found — AI triage will use fallback playbooks."
+    echo "      Start one with the 'llm' CLI, or set SENTRY_LLAMA_MODEL=/path/to/model.gguf."
 fi
 
 # 2. Backend (core + API)

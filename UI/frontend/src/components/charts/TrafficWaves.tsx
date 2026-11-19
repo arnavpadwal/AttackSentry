@@ -3,15 +3,31 @@ import { useTelemetryStore } from '@/stores';
 import { formatBytes, cn } from '@/lib/utils';
 
 interface TrafficWavesProps {
-  height?: number;
   className?: string;
+}
+
+const SM_HEIGHT = 240;
+const XL_HEIGHT = 280;
+const XL_QUERY = '(min-width: 1280px)';
+
+function useChartHeight(): number {
+  const [height, setHeight] = useState(() =>
+    window.matchMedia(XL_QUERY).matches ? XL_HEIGHT : SM_HEIGHT,
+  );
+  useEffect(() => {
+    const query = window.matchMedia(XL_QUERY);
+    const update = () => setHeight(query.matches ? XL_HEIGHT : SM_HEIGHT);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+  return height;
 }
 
 const W = 900;
 const WINDOW = 60;
 const X_PAD = 4;
-const TOP_PAD = 8;
-const BOTTOM_PAD = 20;
+const TOP_PAD = 24;
+const BOTTOM_PAD = 24;
 
 interface Point {
   t: number;
@@ -32,16 +48,9 @@ function linePath(points: Point[], key: 'inbound' | 'outbound', start: number, h
   }).join(' ');
 }
 
-function areaPath(points: Point[], key: 'inbound' | 'outbound', start: number, height: number, max: number): string {
-  if (!points.length) return '';
-  const line = linePath(points, key, start, height, max);
-  const last = points[points.length - 1];
-  const first = points[0];
-  return `${line} L ${xFor(last.t, start).toFixed(1)} ${height - BOTTOM_PAD} L ${xFor(first.t, start).toFixed(1)} ${height - BOTTOM_PAD} Z`;
-}
-
 /** A true 60-second rolling traffic chart, fed by live flow buckets. */
-export default function TrafficWaves({ height = 180, className = '' }: TrafficWavesProps) {
+export default function TrafficWaves({ className = '' }: TrafficWavesProps) {
+  const height = useChartHeight();
   const { timestamps, bytesInPerSec, bytesOutPerSec } = useTelemetryStore((s) => s.aggregated);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
@@ -87,9 +96,15 @@ export default function TrafficWaves({ height = 180, className = '' }: TrafficWa
 
   return (
     <div className={cn('relative w-full overflow-hidden', className)} style={{ height }}>
-      <div className="pointer-events-none absolute left-3 top-1 flex items-center gap-4 text-[10px] tabular-nums text-muted-foreground">
-        <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-chart-1" />In {formatBytes(currentIn)}/s</span>
-        <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-chart-2" />Out {formatBytes(currentOut)}/s</span>
+      <div className="pointer-events-none absolute left-4 top-1 flex items-center gap-4 text-[11px] tabular-nums text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <span className="h-[1.5px] w-3 rounded-full bg-primary" aria-hidden />
+          In {formatBytes(currentIn)}/s
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-[1.5px] w-3 rounded-full bg-muted-foreground" aria-hidden />
+          Out {formatBytes(currentOut)}/s
+        </span>
       </div>
 
       <svg
@@ -100,43 +115,51 @@ export default function TrafficWaves({ height = 180, className = '' }: TrafficWa
         role="img"
         aria-label="Real-time inbound and outbound network traffic for the last 60 seconds"
       >
-        <defs>
-          <linearGradient id="traffic-in-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="hsl(var(--chart-1))" stopOpacity="0.20" />
-            <stop offset="100%" stopColor="hsl(var(--chart-1))" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient id="traffic-out-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="hsl(var(--chart-2))" stopOpacity="0.14" />
-            <stop offset="100%" stopColor="hsl(var(--chart-2))" stopOpacity="0" />
-          </linearGradient>
-        </defs>
+        {[0, 0.5, 1].map((fraction) => {
+          const x = X_PAD + fraction * (W - X_PAD * 2);
+          return (
+            <line
+              key={`v-${fraction}`}
+              x1={x} x2={x}
+              y1={TOP_PAD} y2={height - BOTTOM_PAD}
+              stroke="hsl(var(--border))" strokeWidth="1" strokeOpacity="0.8"
+              vectorEffect="non-scaling-stroke"
+            />
+          );
+        })}
 
-        {[0.25, 0.5, 0.75].map((fraction) => {
+        {[0, 0.25, 0.5, 0.75, 1].map((fraction) => {
           const y = TOP_PAD + usable * fraction;
-          return <line key={fraction} x1={X_PAD} x2={W - X_PAD} y1={y} y2={y} stroke="hsl(var(--border))" strokeOpacity="0.5" strokeDasharray="3 5" vectorEffect="non-scaling-stroke" />;
+          return (
+            <line
+              key={`h-${fraction}`}
+              x1={X_PAD} x2={W - X_PAD}
+              y1={y} y2={y}
+              stroke="hsl(var(--border))" strokeWidth="1" strokeOpacity="0.8"
+              vectorEffect="non-scaling-stroke"
+            />
+          );
         })}
 
         {idle ? (
-          <text x={W / 2} y={height / 2} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize="12">
-            Waiting for live traffic…
+          <text x={W / 2} y={TOP_PAD + usable / 2} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize="11">
+            Waiting for live traffic
           </text>
         ) : (
           <>
-            <path d={areaPath(points, 'outbound', start, height, max)} fill="url(#traffic-out-fill)" />
-            <path d={areaPath(points, 'inbound', start, height, max)} fill="url(#traffic-in-fill)" />
-            <path d={outboundLine} fill="none" stroke="hsl(var(--chart-2))" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-            <path d={inboundLine} fill="none" stroke="hsl(var(--chart-1))" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+            <path d={outboundLine} fill="none" stroke="hsl(var(--muted-foreground))" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+            <path d={inboundLine} fill="none" stroke="hsl(var(--primary))" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
             {lastPoint && (
               <>
-                <circle cx={xFor(lastPoint.t, start)} cy={lastY(lastPoint.inbound)} r="2.5" fill="hsl(var(--chart-1))" />
-                <circle cx={xFor(lastPoint.t, start)} cy={lastY(lastPoint.outbound)} r="2.5" fill="hsl(var(--chart-2))" />
+                <circle cx={xFor(lastPoint.t, start)} cy={lastY(lastPoint.outbound)} r="2" fill="hsl(var(--muted-foreground))" />
+                <circle cx={xFor(lastPoint.t, start)} cy={lastY(lastPoint.inbound)} r="2" fill="hsl(var(--primary))" />
               </>
             )}
           </>
         )}
       </svg>
 
-      <div className="pointer-events-none absolute bottom-0 left-3 right-3 flex justify-between text-[9px] tabular-nums text-muted-foreground/70">
+      <div className="pointer-events-none absolute bottom-1 left-4 right-4 flex justify-between text-[11px] tabular-nums text-muted-foreground">
         <span>-60s</span><span>-30s</span><span>now</span>
       </div>
     </div>

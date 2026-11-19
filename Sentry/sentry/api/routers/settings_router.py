@@ -32,15 +32,15 @@ async def update_settings(body: SettingsUpdate, user=Depends(require_admin), db:
                "response_mode", "response_min_severity", "response_min_confidence",
                "response_action", "response_ttl_minutes"}
     cfg_map.add("response_auto_resolve")
+    cfg_map.update({"enforcement_mode", "response_max_auto_per_10m"})
     if body.webhook_url is not None:
         _validate_webhook_url(body.webhook_url)
     candidate_url = body.webhook_url if body.webhook_url is not None else cfg.webhook_url
     candidate_secret = body.webhook_secret if body.webhook_secret is not None else cfg.webhook_secret
-    candidate_mode = body.response_mode if body.response_mode is not None else cfg.response_mode
     if candidate_url and len(candidate_secret) < 16:
         raise HTTPException(422, "A webhook signing secret of at least 16 characters is required")
-    if candidate_mode == "automatic" and (not candidate_url or len(candidate_secret) < 16):
-        raise HTTPException(422, "Automatic response requires a configured signed webhook adapter")
+    # Automatic mode always has an adapter: the signed webhook when configured,
+    # otherwise the local enforcement adapter (simulate or nftables).
     updates = {k: v for k, v in body.model_dump().items() if v is not None and k in cfg_map}
     for key, val in updates.items():
         setattr(cfg, key, val)
@@ -110,6 +110,24 @@ def _apply_runtime(cfg) -> None:
     app_state.llm = LLMTriageService() if cfg.llm_provider != "none" else None
     if app_state.pipeline:
         app_state.pipeline.llm = app_state.llm
+        # The batcher captured the previous provider. Rebuild it so the next
+        # incident is triaged with the model the operator just selected.
+        from ...llm.batcher import TriageBatcher
+        import asyncio
+        old = app_state.pipeline.triage
+        app_state.pipeline.triage = (
+            TriageBatcher(app_state.llm, app_state.pipeline._persist_playbook)
+            if app_state.llm else None
+        )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop:
+            if old:
+                loop.create_task(old.stop())
+            if app_state.pipeline.triage:
+                loop.create_task(app_state.pipeline.triage.start())
 
 
 def _validate_webhook_url(url: str) -> None:
@@ -135,4 +153,6 @@ def _settings_out() -> SettingsOut:
         response_min_confidence=cfg.response_min_confidence,
         response_action=cfg.response_action, response_ttl_minutes=cfg.response_ttl_minutes,
         response_auto_resolve=cfg.response_auto_resolve,
+        enforcement_mode=cfg.enforcement_mode,
+        response_max_auto_per_10m=cfg.response_max_auto_per_10m,
     )

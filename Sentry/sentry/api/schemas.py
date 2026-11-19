@@ -141,6 +141,7 @@ class PlaybookOut(ORMModel):
     confidence: str
     mitre_attack: dict = Field(default_factory=dict)
     steps: list[dict] = Field(default_factory=list)
+    sources: list[dict] = Field(default_factory=list)
     false_positive_assessment: Optional[str] = None
     is_fallback: bool = False
 
@@ -277,6 +278,8 @@ class SettingsOut(BaseModel):
     response_action: Literal["dynamic", "isolate_host", "block_ip", "rate_limit"] = "dynamic"
     response_ttl_minutes: int = 60
     response_auto_resolve: bool = False
+    enforcement_mode: Literal["simulate", "nftables"] = "simulate"
+    response_max_auto_per_10m: int = 10
 
 
 class SettingsUpdate(BaseModel):
@@ -298,6 +301,8 @@ class SettingsUpdate(BaseModel):
     response_action: Optional[Literal["dynamic", "isolate_host", "block_ip", "rate_limit"]] = None
     response_ttl_minutes: Optional[int] = Field(default=None, ge=5, le=10080)
     response_auto_resolve: Optional[bool] = None
+    enforcement_mode: Optional[Literal["simulate", "nftables"]] = None
+    response_max_auto_per_10m: Optional[int] = Field(default=None, ge=1, le=100)
 
 
 class LLMTestResult(BaseModel):

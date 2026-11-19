@@ -83,10 +83,25 @@ export interface Playbook {
   technical_analysis: string | null;
   severity: string;
   confidence: string;
-  mitre_attack: { tactic: string; technique: string; description: string };
+  mitre_attack: {
+    tactic: string;
+    technique: string;
+    description: string;
+    technique_id?: string;
+    technique_name?: string;
+    url?: string;
+  };
   steps: PlaybookStep[];
+  sources?: PlaybookSource[];
   false_positive_assessment: string | null;
   is_fallback: boolean;
+}
+
+export interface PlaybookSource {
+  id: string;
+  source: string;
+  title: string;
+  url: string;
 }
 
 export interface PlaybookStep {
@@ -204,6 +219,8 @@ export interface Settings {
   response_action: 'dynamic' | 'isolate_host' | 'block_ip' | 'rate_limit';
   response_ttl_minutes: number;
   response_auto_resolve: boolean;
+  enforcement_mode: 'simulate' | 'nftables';
+  response_max_auto_per_10m: number;
 }
 
 export interface Mitigation {

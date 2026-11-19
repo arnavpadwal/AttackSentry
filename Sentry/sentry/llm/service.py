@@ -6,6 +6,8 @@ import time
 from typing import Any, Dict
 
 from ..config import settings
+from ..knowledge.grounding import ground_playbook
+from ..knowledge.retriever import retrieve
 from ..metrics import LLM_TRIAGES
 from .base import SYSTEM_PROMPT, parse_json_response
 from .local import LocalProvider
@@ -39,15 +41,21 @@ class LLMTriageService:
         self._blocked_until = 0.0
 
     async def generate_playbook(self, report: Dict[str, Any]) -> Dict[str, Any]:
+        references, citations = retrieve(report)
         now = time.time()
         if now < self._blocked_until:
             LLM_TRIAGES.labels("fallback").inc()
-            return _fallback(report, "AI provider cooling down after repeated failures")
+            return _fallback(report, "AI provider cooling down after repeated failures", citations)
         if now - self._last_call < self._min_interval:
             await _sleep(self._min_interval - (now - self._last_call))
         self._last_call = time.time()
 
         user_message = _serialize(report)
+        if references:
+            user_message = (
+                f"{user_message}\n\nREFERENCE PASSAGES (authoritative; cite only these "
+                f"identifiers and controls):\n{references}"
+            )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
@@ -55,7 +63,9 @@ class LLMTriageService:
         try:
             content = await self.provider.generate(messages)
             try:
-                playbook = _validate(parse_json_response(content))
+                playbook = ground_playbook(
+                    _validate(parse_json_response(content)), report, citations
+                )
             except Exception:
                 # Smaller local models occasionally answer a long schema prompt
                 # with `{}` or prose. Retry once with a compact repair prompt.
@@ -63,7 +73,9 @@ class LLMTriageService:
                     {"role": "system", "content": _REPAIR_PROMPT},
                     {"role": "user", "content": user_message},
                 ])
-                playbook = _validate(parse_json_response(repaired))
+                playbook = ground_playbook(
+                    _validate(parse_json_response(repaired)), report, citations
+                )
             LLM_TRIAGES.labels("success").inc()
             self._consecutive_failures = 0
             return playbook
@@ -76,7 +88,7 @@ class LLMTriageService:
                 # the full request timeout. Fall back fast and probe again later.
                 self._blocked_until = time.time() + 60.0
                 logger.warning("AI provider circuit opened for 60s after repeated failures")
-            return _fallback(report, str(exc))
+            return _fallback(report, str(exc), citations)
 
     async def health_check(self) -> bool:
         return await self.provider.health_check()
@@ -137,7 +149,12 @@ def _validate(playbook: Dict[str, Any]) -> Dict[str, Any]:
     return playbook
 
 
-def _fallback(report: Dict[str, Any], error: str) -> Dict[str, Any]:
+def _fallback(
+    report: Dict[str, Any],
+    error: str,
+    citations: list[dict[str, str]] | None = None,
+    diagnostic: bool = True,
+) -> Dict[str, Any]:
     ctx = report.get("context", {})
     src = ctx.get("src_ip", "Unknown")
     dst = ctx.get("dst_ip", "Unknown")
@@ -162,12 +179,12 @@ def _fallback(report: Dict[str, Any], error: str) -> Dict[str, Any]:
             {"step_id": 2, "title": "Collect and validate evidence", "description": "Review process, identity, destination, and related-flow evidence for compromise indicators.", "action_type": "investigate", "target": src, "priority": "urgent", "auto_executable": False, "command_hint": None},
             {"step_id": 3, "title": "Eradicate and monitor", "description": "Remove persistence, rotate exposed credentials, patch the entry path, and monitor recurrence before release.", "action_type": "remediate", "target": src, "priority": "standard", "auto_executable": False, "command_hint": None},
         ]
-    return {
+    result = {
         "attack_summary": f"AttackSentry correlated {attack} activity affecting {dst}.",
         "technical_analysis": (
             f"{report.get('reason', '')}\n\n"
             f"Local LLM diagnostic: {error[:300]}"
-        ).strip(),
+        ).strip() if diagnostic else str(report.get("reason") or "Correlated detection evidence.").strip(),
         "severity": sev,
         "confidence": "medium",
         "mitre_attack": {"tactic": "Unknown", "technique": "Unknown", "description": "LLM offline"},
@@ -175,3 +192,17 @@ def _fallback(report: Dict[str, Any], error: str) -> Dict[str, Any]:
         "false_positive_assessment": "LLM service unavailable — manual review required.",
         "_llm_error": error,
     }
+    try:
+        return ground_playbook(result, report, citations)
+    except Exception:
+        return result
+
+
+def provisional_playbook(report: Dict[str, Any]) -> Dict[str, Any]:
+    """Deterministic first plan, so no incident ever opens without guidance.
+
+    The AI assessment replaces it when the batcher completes; until then the
+    console shows a labelled fallback instead of an empty panel.
+    """
+    _, citations = retrieve(report)
+    return _fallback(report, "assessment pending", citations, diagnostic=False)
